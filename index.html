@@ -1,302 +1,220 @@
-<style>
-*{box-sizing:border-box;margin:0;padding:0}
-body{background:transparent}
-#app{display:flex;flex-direction:column;align-items:center;gap:16px;padding:20px 0;font-family:var(--font-sans)}
-#controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:center}
-#controls input[type=number]{width:60px;text-align:center}
-#controls input[type=text]{width:120px}
-button{cursor:pointer}
-#result-display{font-size:28px;font-weight:500;color:var(--color-text-primary);min-height:40px;text-align:center}
-#result-label{font-size:13px;color:var(--color-text-secondary);text-align:center}
-canvas{display:block}
-</style>
-
-<div id="app">
-  <h2 class="sr-only">Spinning number wheel with realistic physics and clicker arm</h2>
-  <div id="controls">
-    <input type="number" id="seg-count" min="2" max="1000" value="8" title="Segments">
-    <button id="add-seg-btn">+ Add segment</button>
-    <button id="spin-btn">Spin!</button>
-  </div>
-  <canvas id="wheel-canvas" width="640" height="700"></canvas>
-  <div id="result-display"></div>
-  <div id="result-label">Press Spin!</div>
-</div>
-
-<script>
-const canvas = document.getElementById('wheel-canvas');
-const ctx = canvas.getContext('2d');
-const W = canvas.width, H = canvas.height;
-const cx = W/2, cy = H/2 - 30;
-const R = 260;
-
-let segments = [];
-let angle = 0;
-let omega = 0;
-let spinning = false;
-let lastTime = null;
-let clickerAngle = -Math.PI/2 + 0.18;
-let clickerVel = 0;
-let clickerBase = -Math.PI/2 + 0.18;
-let lastSegIndex = -1;
-let audioCtx = null;
-let resultShown = false;
-
-const COLORS = [
-  ['#534AB7','#fff'],['#0F6E56','#fff'],['#993C1D','#fff'],['#185FA5','#fff'],
-  ['#3B6D11','#fff'],['#854F0B','#fff'],['#993556','#fff'],['#5F5E5A','#fff'],
-  ['#3C3489','#fff'],['#085041','#fff'],['#712B13','#fff'],['#0C447C','#fff'],
-  ['#27500A','#fff'],['#633806','#fff'],['#72243E','#fff'],['#444441','#fff'],
-];
-
-function initSegments(n) {
-  segments = [];
-  for(let i=0;i<n;i++){
-    segments.push({label: String(i+1), color: COLORS[i % COLORS.length][0], text: COLORS[i % COLORS.length][1]});
-  }
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, initial-scale=1.0">
+		<title>pong</title>
+		<style>
+html, body, #canvas {
+	margin: 0;
+	padding: 0;
+	border: 0;
 }
 
-function drawTopNotch() {
-  // small notch at the top center to indicate the winner position (12 o'clock)
-  const notchW = Math.max(18, Math.round(R*0.07));
-  const notchH = Math.max(14, Math.round(R*0.04));
-  const x = cx;
-  const y = cy - R;
-  ctx.save();
-  ctx.beginPath();
-  ctx.moveTo(x - notchW/2, y - 6);
-  ctx.lineTo(x + notchW/2, y - 6);
-  ctx.lineTo(x, y + notchH);
-  ctx.closePath();
-  ctx.fillStyle = '#E24B4A';
-  ctx.fill();
-  ctx.strokeStyle = '#A32D2D';
-  ctx.lineWidth = Math.max(1, Math.round(R*0.006));
-  ctx.stroke();
-  ctx.restore();
+body {
+	color: white;
+	background-color: black;
+	overflow: hidden;
+	touch-action: none;
 }
 
-function getSegAtAngle(a) {
-  const n = segments.length;
-  const slice = (Math.PI*2)/n;
-  let norm = ((a % (Math.PI*2)) + Math.PI*2) % (Math.PI*2);
-  return Math.floor(norm / slice);
+#canvas {
+	display: block;
 }
 
-function playClick(vol=1) {
-  try {
-    if(!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const o = audioCtx.createOscillator();
-    const g = audioCtx.createGain();
-    o.connect(g); g.connect(audioCtx.destination);
-    o.type = 'triangle';
-    o.frequency.setValueAtTime(1200 + Math.random()*300, audioCtx.currentTime);
-    o.frequency.exponentialRampToValueAtTime(400, audioCtx.currentTime+0.03);
-    g.gain.setValueAtTime(Math.min(vol,1)*0.35, audioCtx.currentTime);
-    g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime+0.07);
-    o.start(); o.stop(audioCtx.currentTime+0.08);
-  } catch(e){}
+#canvas:focus {
+	outline: none;
 }
 
-function drawWheel() {
-  const n = segments.length;
-  if(n===0) return;
-  const slice = (Math.PI*2)/n;
-
-  for(let i=0;i<n;i++){
-    const a0 = angle + i*slice;
-    const a1 = a0 + slice;
-    ctx.beginPath();
-    ctx.moveTo(cx,cy);
-    ctx.arc(cx,cy,R,a0,a1);
-    ctx.closePath();
-    ctx.fillStyle = segments[i].color;
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(255,255,255,0.18)';
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
-
-    ctx.save();
-    ctx.translate(cx,cy);
-    ctx.rotate(a0 + slice/2);
-    ctx.textAlign = 'right';
-    ctx.fillStyle = segments[i].text;
-    const fs = Math.max(12, Math.min(26, Math.floor(200/n)+10));
-    ctx.font = `500 ${fs}px var(--font-sans,sans-serif)`;
-    ctx.fillText(segments[i].label, R-14, fs*0.35);
-    ctx.restore();
-  }
-
-  ctx.beginPath();
-  ctx.arc(cx,cy,18,0,Math.PI*2);
-  ctx.fillStyle = '#f0f0ee';
-  ctx.fill();
-  ctx.strokeStyle = '#bbb';
-  ctx.lineWidth = 2;
-  ctx.stroke();
-
-  ctx.beginPath();
-  ctx.arc(cx,cy,7,0,Math.PI*2);
-  ctx.fillStyle = '#888';
-  ctx.fill();
+#status, #status-splash, #status-progress {
+	position: absolute;
+	left: 0;
+	right: 0;
 }
 
-function drawClicker() {
-  const armLen = Math.round(R*0.32);
-  const tipR = Math.max(8, Math.round(R*0.03));
-  const pivotX = cx + R + Math.round(R*0.09);
-  const pivotY = cy;
-  const tipX = pivotX + Math.cos(clickerAngle)*armLen;
-  const tipY = pivotY + Math.sin(clickerAngle)*armLen;
-
-  ctx.save();
-  ctx.strokeStyle = '#888780';
-  ctx.lineWidth = Math.max(4, Math.round(R*0.02));
-  ctx.lineCap = 'round';
-  ctx.beginPath();
-  ctx.moveTo(pivotX, pivotY);
-  ctx.lineTo(tipX, tipY);
-  ctx.stroke();
-
-  ctx.beginPath();
-  ctx.arc(pivotX, pivotY, Math.max(7, Math.round(R*0.03)), 0, Math.PI*2);
-  ctx.fillStyle = '#5F5E5A';
-  ctx.fill();
-
-  ctx.beginPath();
-  ctx.arc(tipX, tipY, tipR, 0, Math.PI*2);
-  ctx.fillStyle = '#D85A30';
-  ctx.fill();
-  ctx.strokeStyle = '#993C1D';
-  ctx.lineWidth = Math.max(1.5, Math.round(R*0.006));
-  ctx.stroke();
-  ctx.restore();
+#status, #status-splash {
+	top: 0;
+	bottom: 0;
 }
 
-function drawPointer() {
-  const px = cx + R + 3;
-  const py = cy;
-  ctx.save();
-  ctx.beginPath();
-  ctx.moveTo(px+24, py);
-  ctx.lineTo(px+2, py-11);
-  ctx.lineTo(px+2, py+11);
-  ctx.closePath();
-  ctx.fillStyle = '#E24B4A';
-  ctx.fill();
-  ctx.strokeStyle = '#A32D2D';
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
-  ctx.restore();
+#status {
+	background-color: #242424;
+	display: flex;
+	flex-direction: column;
+	justify-content: center;
+	align-items: center;
+	visibility: hidden;
 }
 
-function drawRim() {
-  ctx.beginPath();
-  ctx.arc(cx,cy,R,0,Math.PI*2);
-  ctx.strokeStyle = 'rgba(0,0,0,0.18)';
-  ctx.lineWidth = 3;
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.arc(cx,cy,R+2,0,Math.PI*2);
-  ctx.strokeStyle = 'rgba(255,255,255,0.12)';
-  ctx.lineWidth = 2;
-  ctx.stroke();
+#status-splash {
+	max-height: 100%;
+	max-width: 100%;
+	margin: auto;
 }
 
-function draw() {
-  ctx.clearRect(0,0,W,H);
-  drawWheel();
-  drawRim();
-  drawTopNotch();
-  drawClicker();
+#status-splash.show-image--false {
+	display: none;
 }
 
-function spinLoop(ts) {
-  if(!lastTime) lastTime = ts;
-  const dt = Math.min((ts - lastTime)/1000, 0.05);
-  lastTime = ts;
-
-  const n = segments.length;
-  const slice = (Math.PI*2)/n;
-
-  if(spinning) {
-    const friction = 0.97 - 0.015*(1-Math.min(omega,18)/18);
-    omega *= Math.pow(friction, dt*60);
-    angle += omega * dt;
-
-    const edgeAngle = -Math.PI/2;
-    const norm = ((angle % (Math.PI*2)) + Math.PI*2) % (Math.PI*2);
-    const segAtPointer = Math.floor(((Math.PI*2 - norm + edgeAngle + Math.PI*2) % (Math.PI*2)) / slice);
-
-    if(segAtPointer !== lastSegIndex) {
-      const vol = Math.min(omega/8, 1);
-      playClick(vol);
-      lastSegIndex = segAtPointer;
-
-      clickerVel = -omega * 0.06;
-    }
-
-    const restoreForce = -6 * (clickerAngle - clickerBase);
-    const damp = -8 * clickerVel;
-    clickerVel += (restoreForce + damp) * dt;
-    clickerAngle += clickerVel * dt;
-    clickerAngle = Math.max(clickerBase - 0.38, Math.min(clickerBase + 0.04, clickerAngle));
-
-    if(omega < 0.08) {
-      spinning = false;
-      omega = 0;
-      clickerAngle = clickerBase;
-      clickerVel = 0;
-
-      const finalNorm = ((angle % (Math.PI*2)) + Math.PI*2) % (Math.PI*2);
-      const finalSeg = Math.floor(((Math.PI*2 - finalNorm + (-Math.PI/2) + Math.PI*2) % (Math.PI*2)) / slice);
-      const winner = segments[finalSeg % n];
-      document.getElementById('result-display').textContent = winner.label;
-      document.getElementById('result-label').textContent = 'Winner!';
-    }
-  } else {
-    if(Math.abs(clickerVel) > 0.001 || Math.abs(clickerAngle-clickerBase) > 0.001) {
-      const restoreForce = -10*(clickerAngle-clickerBase);
-      const damp = -12*clickerVel;
-      clickerVel += (restoreForce+damp)*dt;
-      clickerAngle += clickerVel*dt;
-    }
-  }
-
-  draw();
-  requestAnimationFrame(spinLoop);
+#status-splash.fullsize--true {
+	height: 100%;
+	width: 100%;
+	object-fit: contain;
 }
 
-document.getElementById('spin-btn').addEventListener('click', () => {
-  if(spinning) return;
-  omega = 18 + Math.random()*12;
-  spinning = true;
-  resultShown = false;
-  lastSegIndex = -1;
-  document.getElementById('result-display').textContent = '';
-  document.getElementById('result-label').textContent = 'Spinning...';
-});
+#status-splash.use-filter--false {
+	image-rendering: pixelated;
+}
 
-document.getElementById('add-seg-btn').addEventListener('click', () => {
-  if(spinning) return;
-  const n = segments.length + 1;
-  const i = segments.length;
-  segments.push({label: String(n), color: COLORS[i % COLORS.length][0], text: COLORS[i % COLORS.length][1]});
-  document.getElementById('seg-count').value = segments.length;
-  document.getElementById('result-display').textContent = '';
-  document.getElementById('result-label').textContent = 'Press Spin!';
-});
+#status-progress, #status-notice {
+	display: none;
+}
 
-document.getElementById('seg-count').addEventListener('change', (e) => {
-  if(spinning) return;
-  let n = parseInt(e.target.value)||2;
-  n = Math.max(2, Math.min(1000, n));
-  e.target.value = n;
-  initSegments(n);
-  document.getElementById('result-display').textContent = '';
-  document.getElementById('result-label').textContent = 'Press Spin!';
-});
+#status-progress {
+	bottom: 10%;
+	width: 50%;
+	margin: 0 auto;
+}
 
-initSegments(8);
-requestAnimationFrame(spinLoop);
-</script>
+#status-notice {
+	background-color: #5b3943;
+	border-radius: 0.5rem;
+	border: 1px solid #9b3943;
+	color: #e0e0e0;
+	font-family: 'Noto Sans', 'Droid Sans', Arial, sans-serif;
+	line-height: 1.3;
+	margin: 0 2rem;
+	overflow: hidden;
+	padding: 1rem;
+	text-align: center;
+	z-index: 1;
+}
+		</style>
+		<link id="-gd-engine-icon" rel="icon" type="image/png" href="index.icon.png" />
+<link rel="apple-touch-icon" href="index.apple-touch-icon.png"/>
+
+	</head>
+	<body>
+		<canvas id="canvas">
+			Your browser does not support the canvas tag.
+		</canvas>
+
+		<noscript>
+			Your browser does not support JavaScript.
+		</noscript>
+
+		<div id="status">
+			<img id="status-splash" class="show-image--true fullsize--true use-filter--true" src="index.png" alt="">
+			<progress id="status-progress"></progress>
+			<div id="status-notice"></div>
+		</div>
+
+		<script src="index.js"></script>
+		<script>
+const GODOT_CONFIG = {"args":[],"canvasResizePolicy":2,"emscriptenPoolSize":8,"ensureCrossOriginIsolationHeaders":true,"executable":"index","experimentalVK":false,"fileSizes":{"index.pck":24420,"index.wasm":35740641},"focusCanvas":true,"gdextensionLibs":[],"godotPoolSize":4};
+const GODOT_THREADS_ENABLED = false;
+const engine = new Engine(GODOT_CONFIG);
+
+(function () {
+	const statusOverlay = document.getElementById('status');
+	const statusProgress = document.getElementById('status-progress');
+	const statusNotice = document.getElementById('status-notice');
+
+	let initializing = true;
+	let statusMode = '';
+
+	function setStatusMode(mode) {
+		if (statusMode === mode || !initializing) {
+			return;
+		}
+		if (mode === 'hidden') {
+			statusOverlay.remove();
+			initializing = false;
+			return;
+		}
+		statusOverlay.style.visibility = 'visible';
+		statusProgress.style.display = mode === 'progress' ? 'block' : 'none';
+		statusNotice.style.display = mode === 'notice' ? 'block' : 'none';
+		statusMode = mode;
+	}
+
+	function setStatusNotice(text) {
+		while (statusNotice.lastChild) {
+			statusNotice.removeChild(statusNotice.lastChild);
+		}
+		const lines = text.split('\n');
+		lines.forEach((line) => {
+			statusNotice.appendChild(document.createTextNode(line));
+			statusNotice.appendChild(document.createElement('br'));
+		});
+	}
+
+	function displayFailureNotice(err) {
+		console.error(err);
+		if (err instanceof Error) {
+			setStatusNotice(err.message);
+		} else if (typeof err === 'string') {
+			setStatusNotice(err);
+		} else {
+			setStatusNotice('An unknown error occurred.');
+		}
+		setStatusMode('notice');
+		initializing = false;
+	}
+
+	const missing = Engine.getMissingFeatures({
+		threads: GODOT_THREADS_ENABLED,
+	});
+
+	if (missing.length !== 0) {
+		if (GODOT_CONFIG['serviceWorker'] && GODOT_CONFIG['ensureCrossOriginIsolationHeaders'] && 'serviceWorker' in navigator) {
+			let serviceWorkerRegistrationPromise;
+			try {
+				serviceWorkerRegistrationPromise = navigator.serviceWorker.getRegistration();
+			} catch (err) {
+				serviceWorkerRegistrationPromise = Promise.reject(new Error('Service worker registration failed.'));
+			}
+			// There's a chance that installing the service worker would fix the issue
+			Promise.race([
+				serviceWorkerRegistrationPromise.then((registration) => {
+					if (registration != null) {
+						return Promise.reject(new Error('Service worker already exists.'));
+					}
+					return registration;
+				}).then(() => engine.installServiceWorker()),
+				// For some reason, `getRegistration()` can stall
+				new Promise((resolve) => {
+					setTimeout(() => resolve(), 2000);
+				}),
+			]).then(() => {
+				// Reload if there was no error.
+				window.location.reload();
+			}).catch((err) => {
+				console.error('Error while registering service worker:', err);
+			});
+		} else {
+			// Display the message as usual
+			const missingMsg = 'Error\nThe following features required to run Godot projects on the Web are missing:\n';
+			displayFailureNotice(missingMsg + missing.join('\n'));
+		}
+	} else {
+		setStatusMode('progress');
+		engine.startGame({
+			'onProgress': function (current, total) {
+				if (current > 0 && total > 0) {
+					statusProgress.value = current;
+					statusProgress.max = total;
+				} else {
+					statusProgress.removeAttribute('value');
+					statusProgress.removeAttribute('max');
+				}
+			},
+		}).then(() => {
+			setStatusMode('hidden');
+		}, displayFailureNotice);
+	}
+}());
+		</script>
+	</body>
+</html>
+
